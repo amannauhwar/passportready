@@ -98,13 +98,13 @@
                     link.href = downloadUrl;
                     link.download = selectedFile.name; // Use the original file name
                     
-                    // setTimeout(() => {
-                        
-                    // }, 2000);
-                    document.body.appendChild(link);
-                    link.click();
-                    document.body.removeChild(link);
+                    setTimeout(() => {
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
 
+                    }, 2000);
+                  
                     setStatus("Download started.", "success");
 
                 } else {
