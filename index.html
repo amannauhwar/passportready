@@ -4,12 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>S3 File Uploader</title>
-    
     <link rel="stylesheet" href="style.css">
-    
 </head>
 <body>
-
     <main>
         <h2>Upload Your File</h2>
         <p>Select a file to upload and download a processed version.</p>
@@ -26,12 +23,11 @@
 
     <script>
         // === CONFIGURATION ===
-        // ▼▼▼ PASTE YOUR RENDER SERVER URL HERE ▼▼▼
         const API_SERVER_URL = "https://passportready.onrender.com"; 
+        const POLLING_INTERVAL = 2000; // 3 seconds
+        const MAX_POLLS = 20; // 20 retries * 3s = 60s timeout
         // =====================
-
-
-        // Get references to the HTML elements
+        
         const fileInput = document.getElementById('file-input');
         const fileLabel = document.querySelector('.file-label');
         const fileNameDisplay = document.getElementById('file-name');
@@ -39,36 +35,70 @@
         const statusMessage = document.getElementById('status');
         let selectedFile = null;
 
-        // Update the file name display when a file is chosen
         fileInput.addEventListener('change', () => {
             selectedFile = fileInput.files[0];
-            if (selectedFile) {
-                fileNameDisplay.textContent = selectedFile.name;
-                fileLabel.textContent = "Change File";
-            } else {
-                fileNameDisplay.textContent = "No file selected";
-                fileLabel.textContent = "Choose File";
-                selectedFile = null;
-            }
+            fileNameDisplay.textContent = selectedFile ? selectedFile.name : "No file selected";
+            fileLabel.textContent = selectedFile ? "Change File" : "Choose File";
         });
 
         // Helper function to set the status message
         function setStatus(message, type) {
             statusMessage.textContent = message;
-            statusMessage.className = `status-${type}`; // e.g., 'status-error'
+            statusMessage.className = `status-${type}`;
+        }
+        
+        // Helper function to create a delay
+        function wait(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+        
+        // +++ NEW POLLING FUNCTION +++
+        async function pollForDownload(fileName) {
+            let polls = MAX_POLLS;
+            
+            while (polls > 0) {
+                try {
+                    // Ask our server if the file is ready
+                    const response = await fetch(`${API_SERVER_URL}/check-download-url?filename=${fileName}`);
+                    
+                    if (!response.ok) {
+                        throw new Error("Polling request failed");
+                    }
+                    
+                    const data = await response.json();
+                    
+                    if (data.status === "ready") {
+                        // SUCCESS! Return the download URL
+                        return data.download_url;
+                    }
+                    
+                    // If not ready, wait and try again
+                    polls--;
+                    setStatus(`Getting your image ready...`, "info");
+                    await wait(POLLING_INTERVAL);
+                    
+                } catch (error) {
+                    console.error("Polling error:", error);
+                    polls--;
+                    await wait(POLLING_INTERVAL);
+                }
+            }
+            
+            // If we exit the loop, we've timed out
+            throw new Error("File processing timed out.");
         }
 
-        // Main upload logic
+        // +++ UPDATED UPLOAD LOGIC +++
         uploadButton.addEventListener('click', async () => {
             if (!selectedFile) {
                 setStatus("Please select a file first.", "error");
                 return;
             }
 
-            setStatus("Requesting upload URL...", "info");
+            setStatus("Processing...", "info");
 
             try {
-                // STEP 1: Ask our Python server for the URLs
+                // STEP 1: Get the UPLOAD URL ONLY
                 const response = await fetch(`${API_SERVER_URL}/generate-upload-url?filename=${selectedFile.name}`);
                 
                 if (!response.ok) {
@@ -78,38 +108,34 @@
                 
                 const data = await response.json();
                 const uploadUrl = data.upload_url;
-                const downloadUrl = data.download_url;
 
                 // STEP 2: Use the presigned URL to UPLOAD the file to S3
-                setStatus("Uploading file to S3...", "info");
+                setStatus("Working on it...", "info");
                 const uploadResponse = await fetch(uploadUrl, {
                     method: 'PUT',
                     body: selectedFile
                 });
 
-                if (uploadResponse.ok) {
-                    setStatus("Upload successful! Starting download...", "success");
-
-                    // --- DELAY REMOVED ---
-                    // The download will now start immediately.
-
-                    // STEP 3: Trigger the DOWNLOAD
-                    const link = document.createElement('a');
-                    link.href = downloadUrl;
-                    link.download = selectedFile.name; // Use the original file name
-                    
-                    setTimeout(() => {
-                        document.body.appendChild(link);
-                        link.click();
-                        document.body.removeChild(link);
-
-                    }, 5000);
-                  
-                    setStatus("Download started.", "success");
-
-                } else {
-                    setStatus("Upload to S3 failed.", "error");
+                if (!uploadResponse.ok) {
+                    throw new Error('Upload to S3 failed.');
                 }
+                
+                setStatus("Almost done...", "success");
+
+                // STEP 3: Poll for the download URL
+                const downloadUrl = await pollForDownload(selectedFile.name);
+
+                // STEP 4: Trigger the DOWNLOAD
+                setStatus("Ready for Download", "success");
+                
+                const link = document.createElement('a');
+                link.href = downloadUrl;
+                link.download = selectedFile.name; 
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+
+                setStatus("Your image is downloading...", "success");
 
             } catch (error) {
                 console.error("Upload process failed:", error);
